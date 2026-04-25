@@ -1,0 +1,19 @@
+# Personal session settings — contains program-specific credentials and curl commands
+.claude/settings.local.json
+
+# Program engagement folders — contain scope files, findings, personal notes
+# Add your own program directories here
+programs/
+targets/
+engagements/
+
+# Common recon output files generated per engagement
+httpx-live.txt
+scope.txt
+program-guidelines.txt
+burp-export.txt
+*.session
+
+# OS
+.DS_Store
+Thumbs.db

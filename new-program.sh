@@ -70,4 +70,6 @@ echo "  ${GREEN}✓${RESET} httpx-live.txt           ${DIM}← paste httpx outpu
 echo "  ${GREEN}✓${RESET} reports/                 ${DIM}← findings.md written here automatically${RESET}"
 echo ""
 echo "${DIM}Fill in headers.conf first — Claude will use those headers on every request.${RESET}"
-echo "${DIM}Then open Claude from ${DIR}/${RESET}"
+echo ""
+echo "${DIM}Then start your session:${RESET}"
+echo "  cd ${DIR} && claude"

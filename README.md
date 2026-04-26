@@ -1,6 +1,6 @@
 # Haunt
 
-![Haunt](haunt.jpeg)
+![Haunt](assets/haunt.jpeg)
 
 A Claude Code project for bug bounty hunters. Intercept a request in Burp, paste it in — get a full 38-category vulnerability analysis with real payloads, tool commands, and chain analysis.
 

@@ -38,7 +38,7 @@ Open Burp, create an account, walk through the app. Capture login flows, API cal
 Open Claude from your program folder. Give it `httpx-live.txt` and ask for a target prioritization. Claude reads the live hosts, maps the attack surface, and tells you what to focus on.
 
 **4. HauntMode — deep request analysis**
-Copy any request from Burp and ask Claude to run the checklist. Claude dissects every parameter, header, cookie, and body field across all 38 vuln categories, invokes the relevant skill for each, and returns a prioritized attack plan with exact payloads.
+Tell Claude to pull from Burp history directly, or drop in a specific request manually. Claude dissects every parameter, header, cookie, and body field across all 38 vuln categories, invokes the relevant skill for each, and returns a prioritized attack plan with exact payloads.
 
 ---
 
@@ -102,35 +102,88 @@ Claude picks up the program context automatically.
 
 ---
 
+## Burp MCP
+
+With the Burp MCP server running, Claude has direct access to your proxy — no copying or exporting needed. You can ask Claude to:
+
+- Pull the full proxy history and identify the most interesting requests
+- Filter history by host, path, or method
+- Send requests through Burp Repeater and analyze the response
+- Read whatever request is currently open in the editor
+
+This makes the workflow fully live — Burp captures traffic as you browse, Claude reads it directly.
+
+---
+
 ## HauntMode
 
-Copy any raw HTTP request from Burp, paste it into the conversation, and ask Claude to run the checklist:
+Trigger with `/hauntmode`. Three modes:
 
+**Single request** — drop in a raw request and run:
 ```
+/hauntmode
+
 POST /api/v2/user/update HTTP/1.1
 Host: app.target.com
 Cookie: session=abc123
 Content-Type: application/json
 
 {"username":"test","email":"test@example.com"}
-
-run the checklist
 ```
 
-Claude will:
-- Dissect every parameter, header, cookie, and body field
-- Fingerprint the tech stack
-- Evaluate all 38 checklist categories
-- Invoke the relevant skill for each applicable category
-- Return a prioritized attack plan with exact payloads and chain analysis
+**Burp history** — pull directly from your proxy, no copying needed:
+```
+/hauntmode burp api.target.com POST
+```
+Filters by host and method. Omit either to broaden the pull.
+
+**Batch file** — gather requests into a file separated by `---`, then:
+```
+/hauntmode requests.txt
+```
+
+For batch and Burp modes, HauntMode triages first — ranks requests by attack surface and interest, shows you the list, and waits for you to confirm which ones get the full treatment.
+
+**Dupe tracking** — every analyzed request is logged to `reports/hauntmode-log.md` as a single line (`METHOD HOST PATH | findings`). Already-analyzed requests are skipped automatically so you never duplicate work across sessions.
+
+**Volume cap** — if a Burp pull or batch file returns more than 25 unanalyzed requests, HauntMode stops and asks how many you want to tackle first. Bug bounty rewards depth over speed — work through requests in focused batches rather than burning through everything at once.
+
+**Findings and leads** — confirmed vulnerabilities go to `reports/findings.md`, things that need follow-up go to `reports/leads.md` as one-liners. Both persist across context compactions so nothing gets lost in a long session.
+
+---
+
+## Reports
+
+Every program folder gets a `reports/` directory. Claude writes to it automatically — no prompting needed:
+
+| File | Contents |
+|---|---|
+| `findings.md` | Confirmed or high-confidence vulnerabilities — full detail |
+| `leads.md` | One-liners for things that need follow-up but aren't confirmed yet |
+| `hauntmode-log.md` | One line per analyzed request — tracks what's been covered |
+| `recon.md` | Attack surface map output from `/recon` |
+
+Tracking is always on — not just during HauntMode. If Claude spots something interesting during normal conversation it writes it too.
+
+---
+
+## Slash commands
+
+| Command | What it does |
+|---|---|
+| `/recon` | Full attack surface mapping — reads `httpx-live.txt`, pulls Burp history, fingerprints tech, probes common paths, discovers and analyzes JS files, outputs a prioritized target list to `reports/recon.md` |
+| `/recon app.target.com` | Same but focused on a single host |
+| `/hauntmode` | Full 38-category analysis on a single request (pasted or from Burp editor) |
+| `/hauntmode burp api.target.com POST` | Pull matching requests from Burp history, triage, then analyze |
+| `/hauntmode requests.txt` | Batch analysis from a file of requests separated by `---` |
 
 ---
 
 ## Skills
 
-All 37 skills live in `.claude/skills/`. Each covers one vulnerability class:
+All 38 skills live in `.claude/skills/`. Each covers one vulnerability class:
 
-`sqli` `nosqli` `cmdi` `xss` `csrf` `ssrf` `ssti` `lfi` `file-upload` `xxe` `idor` `auth-bypass` `session-attacks` `verb-tampering` `mass-assignment` `prototype-pollution` `deserialization` `crlf` `request-smuggling` `cache-poisoning` `cors` `websocket` `xpath` `ldap` `ssi-esi-xslt` `pdf-injection` `open-redirect` `race-conditions` `type-juggling` `param-logic` `business-logic` `second-order` `api-attacks` `info-disclosure` `wordpress` `dns-rebinding` `ajp-proxy`
+`sqli` `nosqli` `cmdi` `xss` `csrf` `ssrf` `ssti` `lfi` `file-upload` `xxe` `idor` `auth-bypass` `session-attacks` `verb-tampering` `mass-assignment` `prototype-pollution` `deserialization` `crlf` `request-smuggling` `cache-poisoning` `cors` `websocket` `xpath` `ldap` `ssi-esi-xslt` `pdf-injection` `open-redirect` `race-conditions` `type-juggling` `param-logic` `business-logic` `second-order` `api-attacks` `info-disclosure` `wordpress` `dns-rebinding` `ajp-proxy` `js-analysis`
 
 ---
 

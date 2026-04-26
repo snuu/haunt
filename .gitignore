@@ -7,6 +7,9 @@ programs/
 targets/
 engagements/
 
+# Findings and analysis logs — personal, never commit
+reports/
+
 # Common recon output files generated per engagement
 httpx-live.txt
 scope.txt

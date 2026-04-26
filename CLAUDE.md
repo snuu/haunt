@@ -38,7 +38,14 @@ Then wait for me to paste the output before continuing.
 
 ### Burp Suite (Community Edition):
 - Burp is running locally with MCP on `http://127.0.0.1:9876`
-- Use MCP tools to read proxy history, send requests via Repeater, analyze intercepted traffic
+- **Use MCP tools directly — do not wait for the user to paste requests**
+- Key MCP tools:
+  - `get_proxy_http_history` — read the full proxy history
+  - `get_proxy_http_history_regex` — filter history by URL pattern or method
+  - `send_http1_request` / `send_http2_request` — send requests via Burp Repeater
+  - `get_active_editor_contents` — read whatever is currently open in Burp
+  - `get_proxy_websocket_history` — read WebSocket traffic
+- When starting an engagement, pull Burp history with `get_proxy_http_history` to map the attack surface without the user having to export anything
 - No active scanner (Community), no Collaborator — work around this
 - For OOB/blind testing use the configured ezXSS instance (see below)
 
@@ -93,14 +100,14 @@ You then:
 - Give me a ranked list of what to focus on with your reasoning
 
 ### Phase 2 — Recon on Selected Target
-When I confirm a target:
+When I confirm a target, run `/recon` or work through this manually:
 - Read `headers.conf` — confirm required headers and rate limit are loaded
 - Identify tech stack from headers, cookies, error messages, JS files
 - Check `robots.txt`, `.well-known/`, common backup/config file paths via curl
-- Look for JS files and deobfuscate if needed
+- Fetch all JS files and invoke the `js-analysis` skill on each one
 - Map all parameters and input vectors
 - Note any interesting cookies (structure, encoding, predictability)
-- Note any API endpoints
+- Note any API endpoints discovered via JS analysis or Burp history
 
 ### Phase 3 — Vulnerability Checklist
 
@@ -214,6 +221,33 @@ Work through this checklist against the target. For each item: invoke the releva
 
 ---
 
+## Finding and Lead Tracking — ALWAYS ON
+
+These rules apply at all times — during HauntMode, during recon, during normal conversation. Any time you identify a finding or lead, record it. This is not HauntMode-specific.
+
+**Leads** — something worth following up but not confirmed. Append one line to `reports/leads.md`:
+```
+category — param/field — why it's interesting
+```
+Example: `sqli — user_id param — numeric, no sanitization visible, try 1'--`
+
+**Findings** — confirmed or high-confidence. Append to `reports/findings.md`:
+```markdown
+## [vuln class] — [URL/endpoint]
+**Parameter:** [param]
+**Evidence:** [what you observed]
+**Impact:** [business impact]
+**Next step:** [what to confirm/escalate]
+
+---
+```
+
+**Write discipline** — during a structured analysis (HauntMode, checklist), accumulate in memory and write once at the end. During normal conversation, write immediately when something is identified. Never overwrite — always append. Create the file if it doesn't exist.
+
+Both files persist across context compactions so nothing is ever lost.
+
+---
+
 ## Checklist Status Reporting
 
 After completing each category, report:
@@ -230,6 +264,25 @@ Evidence: [what you observed]
 Impact: [business impact assessment]
 Next step: [what to confirm/escalate]
 ```
+
+---
+
+## Response Diffing
+
+When testing whether a payload changes server behaviour, save responses to temp files and diff them:
+
+```bash
+# Baseline
+curl -s [normal request flags] > /tmp/baseline.txt
+
+# With payload
+curl -s [modified request flags] > /tmp/test.txt
+
+# Diff
+diff /tmp/baseline.txt /tmp/test.txt
+```
+
+Use this any time you need to compare before/after — payload vs no payload, different parameter values, different user roles. A clean diff means no observable difference; any change is worth investigating.
 
 ---
 

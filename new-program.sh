@@ -59,6 +59,7 @@ cat > "${DIR}/scope.txt" << 'EOF'
 EOF
 
 touch "${DIR}/httpx-live.txt"
+mkdir -p "${DIR}/reports"
 
 echo ""
 echo "${BOLD}${CYAN}Created: ${DIR}/${RESET}"
@@ -66,6 +67,7 @@ echo "  ${GREEN}✓${RESET} headers.conf             ${DIM}← required headers 
 echo "  ${GREEN}✓${RESET} program-guidelines.txt  ${DIM}← scope rules, out-of-scope items, notes${RESET}"
 echo "  ${GREEN}✓${RESET} scope.txt                ${DIM}← in-scope domains${RESET}"
 echo "  ${GREEN}✓${RESET} httpx-live.txt           ${DIM}← paste httpx output here${RESET}"
+echo "  ${GREEN}✓${RESET} reports/                 ${DIM}← findings.md written here automatically${RESET}"
 echo ""
 echo "${DIM}Fill in headers.conf first — Claude will use those headers on every request.${RESET}"
 echo "${DIM}Then open Claude from ${DIR}/${RESET}"

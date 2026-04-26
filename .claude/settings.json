@@ -4,5 +4,37 @@
       "Bash(curl *)",
       "Bash(python3 *)"
     ]
+  },
+  "spinnerVerbs": {
+    "mode": "replace",
+    "verbs": [
+      "Haunting",
+      "Stalking",
+      "Probing",
+      "Scanning",
+      "Hunting",
+      "Digging",
+      "Fuzzing",
+      "Recon'ing",
+      "Enumerating",
+      "Injecting"
+    ]
+  },
+  "spinnerTipsOverride": {
+    "excludeDefault": true,
+    "tips": [
+      "/hauntmode — full 38-category analysis on a request",
+      "/hauntmode burp api.target.com POST — pull filtered Burp history",
+      "/hauntmode requests.txt — batch analyze a file of requests",
+      "/recon — map attack surface from httpx-live.txt + Burp history",
+      "/recon app.target.com — focused recon on a single host",
+      "Leads land in reports/leads.md — check it after a session",
+      "Confirmed findings go to reports/findings.md automatically",
+      "Fill in headers.conf — Claude adds those headers to every request",
+      "Set RATE_LIMIT in headers.conf to stay within program rules",
+      "HauntMode triages batch requests before running full analysis",
+      "Already-analyzed requests are skipped automatically — no dupes",
+      "Ask Claude to pull Burp history directly — no copying needed"
+    ]
   }
 }

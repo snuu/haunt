@@ -50,7 +50,6 @@ When you need a payload or technique, invoke the corresponding skill. Do not rel
 - `nuclei`
 - `cachebuster` / cache probing tools
 - Anything that runs as a background scan or hits many endpoints at once
-- Any Burp-related tool invocation
 
 **Format for commands I should run:**
 ```
@@ -59,18 +58,36 @@ When you need a payload or technique, invoke the corresponding skill. Do not rel
 ```
 Then wait for me to paste the output before continuing.
 
-### Burp Suite (Community Edition):
-- Burp is running locally with MCP on `http://127.0.0.1:9876`
+### Caido (primary proxy — replaces Burp):
+- Caido is running with the Vibe Hacking MCP plugin at `http://127.0.0.1:3333/mcp`
 - **Use MCP tools directly — do not wait for the user to paste requests**
-- Key MCP tools:
-  - `get_proxy_http_history` — read the full proxy history
-  - `get_proxy_http_history_regex` — filter history by URL pattern or method
-  - `send_http1_request` / `send_http2_request` — send requests via Burp Repeater
-  - `get_active_editor_contents` — read whatever is currently open in Burp
-  - `get_proxy_websocket_history` — read WebSocket traffic
-- When starting an engagement, pull Burp history with `get_proxy_http_history` to map the attack surface without the user having to export anything
-- No active scanner (Community), no Collaborator — work around this
+- No active scanner, no Collaborator — work around this
 - For OOB/blind testing use the configured ezXSS instance (see below)
+
+**Key Caido MCP tools and when to use them:**
+
+| Tool | Purpose |
+|---|---|
+| `query-requests` | Pull proxy history, filter by host/path/method to map attack surface |
+| `get-request` / `get-request-raw` | Fetch a specific request by ID for detailed analysis |
+| `send-request` | Fire individual test requests directly (one-shot probes) |
+| `create-replay-session` | Create a named replay session from a request (Repeater equivalent) |
+| `start-replay-task` | Execute a replay session |
+| `get-replay-entry` | Read the response from a completed replay |
+| `create-tamper-rule` | Add a match & replace rule — use to auto-inject required headers on all requests to a host |
+| `toggle-tamper-rule` | Enable/disable a tamper rule |
+| `create-finding` | Log a confirmed or suspected finding directly into Caido's bug tracker |
+| `create-hosted-file` | Host a payload file through Caido's built-in server for OOB testing |
+| `create-environment` / `set-environment` | Store auth tokens, cookies, account IDs as named variables |
+| `list-websocket-streams` / `list-websocket-messages` | Read WebSocket history |
+| `is-request-in-scope` | Verify a URL is in scope before testing |
+| `create-scope` / `update-scope` | Define or update in-scope hosts |
+
+**Workflow notes:**
+- When starting an engagement, pull history with `query-requests` to map the attack surface — no need for the user to export anything
+- When a required header must be on every request to a target (from `headers.conf`), create a tamper rule once at engagement start so it's never missing
+- Use `create-finding` immediately when a vuln is confirmed — don't rely on notes alone
+- Use `create-hosted-file` + the hosted URL as the OOB callback destination when ezXSS isn't appropriate (non-JS payloads)
 
 ---
 
@@ -91,9 +108,12 @@ At the start of every engagement, confirm these files exist in the program folde
 - `program-guidelines.txt` — program rules, out-of-scope items, notes
 - `scope.txt` — all in-scope domains/wildcards (one per line)
 - `httpx-live.txt` — live hosts from httpx output (I will have run this already)
-- `burp-export.txt` or similar — exported requests from Burp after manual browsing
 
-If any are missing, ask me for them before proceeding.
+Also at engagement start:
+- Use `create-scope` in Caido to define in-scope hosts so `is-request-in-scope` checks are accurate
+- Read `headers.conf` and create a tamper rule via `create-tamper-rule` for any required headers so they're auto-injected on all requests to the target host
+
+If any required files are missing, ask me for them before proceeding.
 
 ### Required Headers & Rate Limit — HARD RULES
 
@@ -112,12 +132,12 @@ If any are missing, ask me for them before proceeding.
 ### Phase 1 — Target Selection (I handle this, you assist)
 I will:
 1. Run subfinder on wildcards → combine all in-scope domains → run httpx
-2. Browse targets manually, create accounts where possible, capture traffic in Burp
+2. Browse targets manually, create accounts where possible, capture traffic in Caido
 3. Run katana/ffuf/waymore for additional endpoint discovery
-4. Export Burp history and give it to you
 
 You then:
-- Read `httpx-live.txt` and Burp export
+- Use `query-requests` to pull Caido proxy history for the target host(s)
+- Read `httpx-live.txt` for the full host list
 - Identify the most interesting targets: login flows, file uploads, APIs, user-controlled parameters, search functions, profile fields, admin panels, password reset flows, anything that takes user input or makes server-side requests
 - Prioritize targets with high business impact potential
 - Give me a ranked list of what to focus on with your reasoning
@@ -350,7 +370,7 @@ A single endpoint leaking PII for thousands of users is a critical finding. Trea
 
 ## HauntMode — Deep Request Analysis
 
-**Activation:** When I paste a raw HTTP request (from Burp intercept or history) and ask for
+**Activation:** When I paste a raw HTTP request (from Caido or Burp intercept/history) and ask for
 analysis, testing ideas, "run the checklist", or anything implying security analysis of that
 specific request — enter HauntMode. Do not activate automatically for any other reason.
 

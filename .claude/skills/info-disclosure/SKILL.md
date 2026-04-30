@@ -74,6 +74,19 @@ Look for: stack traces, DB query text, file system paths, class/method names, fr
 
 Document exact error messages — they often reveal the precise tech stack and attack vectors.
 
+**Encoding fuzzing to trigger verbose errors:** Unusual byte sequences often bypass input validation and reach internal parsing code that generates unhandled exceptions with full stack traces or config values. Try these against any string parameter:
+
+```bash
+# High-codepoint Unicode / multibyte sequences
+curl -s "https://target.com/api/users?id=%EF%BF%BD"       # U+FFFD replacement char
+curl -s "https://target.com/api/users?id=%C0%AF"          # overlong UTF-8 slash
+curl -s "https://target.com/api/users?id=%00"             # null byte
+curl -s "https://target.com/api/users?id=\xc3\x28"       # invalid UTF-8 continuation
+curl -s "https://target.com/page/%e2%80%8b"               # zero-width space in path
+```
+
+Rails is particularly notable: malformed encoding in certain params can trigger an exception page that includes `secret_key_base` in the environment dump. If found, see auth-bypass §16.6 for forging sessions and §16.6 escalation to deserialization RCE.
+
 ---
 
 ## 5. Backup and config file discovery
@@ -183,6 +196,14 @@ for name, src in zip(data.get('sources',[]), data.get('sourcesContent',[])):
 "
 ```
 
+**Embedded challenge/CAPTCHA tokens in static JS:** If the app requires solving a CAPTCHA or security challenge before login, the token used to replay the authentication request after challenge completion is sometimes embedded directly in a static JS file (not generated fresh per session). Scan JS files for token-like values alongside CAPTCHA-related keywords:
+
+```bash
+curl -s https://target.com/static/app.js | grep -iE '(captcha|challenge|recaptcha|hcaptcha|token|nonce|replay)' | grep -v '//.*captcha' | head -20
+```
+
+If a static token is found, test whether submitting it directly to the post-challenge authentication endpoint bypasses the challenge requirement. Impact: the CAPTCHA or security challenge is trivially bypassable for automated attacks.
+
 ---
 
 ## 9. HTML comment analysis
@@ -217,6 +238,16 @@ echo "VALUE" | base64 -d 2>/dev/null
 ```
 
 For JWT cookies, use `jwt_tool` or manually base64-decode each segment.
+
+**Session cookie in cacheable file-serving response:** When an app serves files or blobs (downloads, Active Storage, attachments), the response may include `Set-Cookie` with the session cookie alongside `Cache-Control: public`. If a caching proxy stores this response, the session cookie is included in the cached copy and can be retrieved by any subsequent visitor who gets the cached response.
+
+```bash
+# Check file-serving/blob/download endpoints for this combination
+curl -sI "https://target.com/files/some-attachment" | grep -iE "(set-cookie|cache-control)"
+# Dangerous: both Set-Cookie and Cache-Control: public in the same response
+```
+
+Report if: `Set-Cookie: session=...` + `Cache-Control: public` (or `s-maxage`) appear together on any endpoint that could be cached by a shared proxy or CDN.
 
 ---
 
@@ -317,6 +348,77 @@ site:target.com inurl:admin
 site:target.com intitle:"index of"
 site:target.com "internal"
 ```
+
+---
+
+## 12.1 GraphQL invitation token → email address resolution
+
+When a GraphQL API exposes invitation tokens in a query response, and those tokens can be resolved to email addresses via a separate unauthenticated endpoint, an attacker can enumerate invited users' email addresses:
+
+```graphql
+# Step 1: get invitation tokens (authenticated but low-privilege)
+query {
+  team(handle:"TARGET_PROGRAM") {
+    soft_launch_invitations {
+      nodes {
+        ... on InvitationsSoftLaunch { token }
+      }
+    }
+  }
+}
+
+# Step 2: resolve token → email via .json endpoint
+GET /invitations/TOKEN.json
+# Returns: {"email":"victim@example.com","recipient":{"username":"..."},...}
+```
+
+**What to look for:**
+- GraphQL queries that return `token` fields for invitation/sharing objects
+- Corresponding unauthenticated REST endpoints (`/invitations/:token`, `/shares/:token`, `/reset/:token`) that resolve token to user identity
+- The token being exposed to users who shouldn't see who else was invited (e.g., one invitee seeing all other invitees' tokens)
+
+## 12.2 WebSocket / application messages expose backend storage API URLs and access tokens
+
+When a document viewer, collaboration tool, or file preview feature communicates via WebSocket, the connection messages often carry the full backend storage API URL including a time-limited access token. This URL bypasses any frontend "hide download" or watermark-only restriction because it speaks directly to the storage layer (WOPI, S3 pre-signed, ONLYOFFICE, etc.):
+
+**How to find it:**
+1. Open browser DevTools → Network → WS tab
+2. Open the document/preview
+3. Inspect the WebSocket frames — look for `WOPISrc=`, `access_token=`, `download_url=`, `src=` parameters containing full backend URLs
+4. Extract the URL and request it directly (GET in a new tab or curl)
+
+**What it bypasses:** "Hide download" flags, watermark-only sharing, VDR (Virtual Data Room) restrictions, collabora/ONLYOFFICE "secure view" modes — any restriction enforced at the frontend layer while the backend storage API remains directly accessible via the token in the WS message.
+
+**Broadly applicable to:** Nextcloud Collabora, ONLYOFFICE, Google Docs-alike integrations, any WebSocket-based document collaboration that passes a storage token in the connection init message.
+
+---
+
+## 12.3 Account existence enumeration via unauthenticated onboarding/registration flow
+
+Mobile apps and APIs often include a step in the login/registration flow that checks whether an email address or phone number is already registered — before any authentication. This endpoint is typically accessible with only a guest/anonymous token (or no token at all). If the app has a "discoverability" or "privacy" setting meant to prevent other users from finding an account by email/phone, this pre-auth check bypasses it entirely.
+
+**Detection:**
+1. Intercept the login or "create account" flow before credentials are submitted
+2. Look for a request like `POST /api/v1/users/check`, `GET /api/users/exists?email=`, `/onboarding/check_email`, or a similar early-flow endpoint that returns different responses for registered vs. unregistered addresses
+3. Try it with a guest token (obtained from app init) or no auth header at all
+
+**Test:**
+```bash
+# Replace with the actual pre-auth check endpoint discovered from traffic
+curl -s -X POST https://target.com/api/v1/users/lookup \
+  -H "Authorization: Bearer GUEST_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"email": "known_user@example.com"}'
+
+curl -s -X POST https://target.com/api/v1/users/lookup \
+  -H "Authorization: Bearer GUEST_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"email": "definitely_does_not_exist_123@example.com"}'
+```
+
+A different response body, status code, or timing between the two confirms account existence disclosure.
+
+**Impact:** Bypasses user-configured privacy/discoverability settings. Allows enumeration of registered email addresses/phone numbers without any account. Relevant for platforms with sensitive user bases (health, finance, social).
 
 ---
 

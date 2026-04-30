@@ -2,9 +2,9 @@
 
 ![Haunt](assets/haunt.jpeg)
 
-A Claude Code project for bug bounty hunters. Intercept a request in Burp, paste it in — get a full 38-category vulnerability analysis with real payloads, tool commands, and chain analysis.
+A Claude Code project for bug bounty hunters. Intercept a request in Caido, paste it in — get a full 38-category vulnerability analysis with real payloads, tool commands, and chain analysis.
 
-Haunt is built around the way bug bounty actually works: you run your own recon, browse the target manually, and capture traffic in Burp. The more context you bring — live hosts, intercepted requests, JS endpoints, error responses — the sharper the analysis. Think of it as a senior collaborator sitting next to you who knows every vuln class cold and can immediately tell you what's worth chasing in a given request.
+Haunt is built around the way bug bounty actually works: you run your own recon, browse the target manually, and capture traffic in Caido. The more context you bring — live hosts, intercepted requests, JS endpoints, error responses — the sharper the analysis. Think of it as a senior collaborator sitting next to you who knows every vuln class cold and can immediately tell you what's worth chasing in a given request.
 
 ---
 
@@ -32,22 +32,21 @@ katana -list httpx-live.txt -o endpoints.txt
 ```
 
 **2. Browse manually**
-Open Burp, create an account, walk through the app. Capture login flows, API calls, file uploads, profile updates, anything that looks interesting. Let Burp build a history of the target.
+Open Caido, create an account, walk through the app. Capture login flows, API calls, file uploads, profile updates, anything that looks interesting. Let Caido build a history of the target.
 
 **3. Feed Claude**
-Open Claude from your program folder. Give it `httpx-live.txt` and ask for a target prioritization. Claude reads the live hosts, maps the attack surface, and tells you what to focus on.
+Open Claude from your program folder. Give it `httpx-live.txt` and ask for a target prioritization. Claude reads the live hosts, pulls Caido proxy history via MCP, maps the attack surface, and tells you what to focus on.
 
 **4. HauntMode — deep request analysis**
-Tell Claude to pull from Burp history directly, or drop in a specific request manually. Claude dissects every parameter, header, cookie, and body field across all 38 vuln categories, invokes the relevant skill for each, and returns a prioritized attack plan with exact payloads.
+Tell Claude to pull from Caido history directly, or drop in a specific request manually. Claude dissects every parameter, header, cookie, and body field across all 38 vuln categories, invokes the relevant skill for each, and returns a prioritized attack plan with exact payloads.
 
 ---
 
 ## Prerequisites
 
 - [Claude Code](https://claude.ai/code) with an active subscription
-- Burp Suite (Community Edition works)
-- [Burp MCP server](https://github.com/PortSwigger/mcp-server) — install the extension in Burp and enable it
-- An ezXSS instance for OOB blind testing — [self-host](https://github.com/ssl/ezXSS) or use a collaborator alternative
+- [Caido](https://caido.io) with the [Vibe Hacking MCP plugin](https://github.com/caido-community/vibe-hacking) installed and running on `http://127.0.0.1:3333/mcp`
+- An ezXSS instance for OOB blind XSS — [self-host](https://github.com/ssl/ezXSS) or use a collaborator alternative
 - Kali Linux or equivalent (standard pentesting tools assumed: ffuf, sqlmap, httpx, subfinder, etc.)
 
 ---
@@ -102,16 +101,20 @@ Claude picks up the program context automatically.
 
 ---
 
-## Burp MCP
+## Caido MCP
 
-With the Burp MCP server running, Claude has direct access to your proxy — no copying or exporting needed. You can ask Claude to:
+With the Vibe Hacking MCP plugin running, Claude has direct access to Caido — no copying or exporting needed. You can ask Claude to:
 
-- Pull the full proxy history and identify the most interesting requests
-- Filter history by host, path, or method
-- Send requests through Burp Repeater and analyze the response
-- Read whatever request is currently open in the editor
+- Pull proxy history and identify the most interesting requests (`query-requests`)
+- Filter history by host, path, method, or status code
+- Send requests directly and analyze the response (`send-request`)
+- Create replay sessions for iterative testing (`create-replay-session` / `start-replay-task`)
+- Auto-inject required headers on all requests via tamper rules (`create-tamper-rule`)
+- Log confirmed findings into Caido's built-in tracker (`create-finding`)
+- Host OOB payload files through Caido's server (`create-hosted-file`)
+- Read WebSocket traffic (`list-websocket-streams` / `list-websocket-messages`)
 
-This makes the workflow fully live — Burp captures traffic as you browse, Claude reads it directly.
+This makes the workflow fully live — Caido captures traffic as you browse, Claude reads it directly via MCP.
 
 ---
 
@@ -131,9 +134,9 @@ Content-Type: application/json
 {"username":"test","email":"test@example.com"}
 ```
 
-**Burp history** — pull directly from your proxy, no copying needed:
+**Caido history** — pull directly from your proxy, no copying needed:
 ```
-/hauntmode burp api.target.com POST
+/hauntmode caido api.target.com POST
 ```
 Filters by host and method. Omit either to broaden the pull.
 
@@ -171,10 +174,10 @@ Tracking is always on — not just during HauntMode. If Claude spots something i
 
 | Command | What it does |
 |---|---|
-| `/recon` | Full attack surface mapping — reads `httpx-live.txt`, pulls Burp history, fingerprints tech, probes common paths, discovers and analyzes JS files, outputs a prioritized target list to `reports/recon.md` |
+| `/recon` | Full attack surface mapping — reads `httpx-live.txt`, pulls Caido history, fingerprints tech, probes common paths, discovers and analyzes JS files, outputs a prioritized target list to `reports/recon.md` |
 | `/recon app.target.com` | Same but focused on a single host |
-| `/hauntmode` | Full 38-category analysis on a single request (pasted or from Burp editor) |
-| `/hauntmode burp api.target.com POST` | Pull matching requests from Burp history, triage, then analyze |
+| `/hauntmode` | Full 38-category analysis on a single request (pasted or from Caido history) |
+| `/hauntmode caido api.target.com POST` | Pull matching requests from Caido history, triage, then analyze |
 | `/hauntmode requests.txt` | Batch analysis from a file of requests separated by `---` |
 
 ---

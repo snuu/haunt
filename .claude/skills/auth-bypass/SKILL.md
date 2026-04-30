@@ -171,6 +171,24 @@ Also check the security question step — if username is in the POST body, chang
 
 ---
 
+## 9.5 Invite token used without email verification
+
+When a platform has an invite-based registration flow, invite tokens are often associated with a specific email address in the database. If the invite acceptance endpoint doesn't verify that the requestor's email matches the one the token was issued for, any valid invite token can be used to authenticate as — or take over — the account that was invited.
+
+**Test pattern:**
+1. Obtain a valid invite token for a target account (via info-disclosure, GraphQL leak — see info-disclosure §12.1, or from an invite email you receive)
+2. Submit the invite token at the acceptance endpoint without providing the associated email — or provide a *different* email address
+3. If the server accepts the token and creates/logs into the associated account → ATO
+
+**What to look for:**
+- `POST /invitations/accept`, `GET /invite?token=`, `/join?code=`, `/register?invite=` endpoints
+- Endpoints that take a token and a new password but don't validate the email field matches
+- Endpoints where the token alone (no email, no further verification) completes authentication
+
+**Chain with info-disclosure §12.1:** GraphQL queries that return invitation tokens for other users can supply the tokens for this attack.
+
+---
+
 ## 10. Password reset — Host header poisoning
 
 If the app generates the reset link using the `Host` header (e.g., `https://<Host>/reset?token=XYZ`), inject your server into the Host header and the reset link will call back to you with the victim's token.
@@ -245,6 +263,14 @@ if(!$_SESSION['active']) {
     // NO exit; after this — vulnerable!
 }
 ```
+
+**Sensitive action API bypasses UI-layer confirmation check:** When the UI requires a recent password confirmation before a sensitive action (generate app token, change email, disable 2FA, export data), the backing API endpoint may not enforce the same check. Directly calling the raw API endpoint skips the middleware that validates the confirmation.
+
+Test pattern:
+1. Trigger the sensitive action in the UI — intercept and note the raw API endpoint called
+2. Also check JS source or network tab for related endpoints (e.g. `/api/getapppassword`, `/api/tokens/generate`)
+3. Call that endpoint directly with only your normal session cookie (no prior confirmation step)
+4. If it succeeds, the confirmation check is UI-only
 
 ---
 
@@ -393,8 +419,67 @@ ffuf -u https://target.com/admin.php -w /tmp/ips.txt -H 'Host: FUZZ' -fs 752
 
 - **Missing `state` parameter:** CSRF against the OAuth flow. Attacker can initiate login-with-OAuth and make victim complete it, linking attacker's account to victim's identity.
 - **Open redirect in `redirect_uri`:** If the app validates `redirect_uri` by prefix only, try `redirect_uri=https://target.com.evil.com` or `redirect_uri=https://target.com/logout?next=https://evil.com`. The auth code is delivered to the attacker.
+- **Path traversal in `redirect_uri`:** If the app validates that `redirect_uri` starts with an allowed prefix but doesn't normalize `..` sequences, append a traversal to escape the allowed path while still passing the prefix check: `redirect_uri=https://target.com/callback/../../../attacker/path`. The server sees the prefix match; the browser resolves `../` and delivers the auth code to the traversed destination. Useful when the attacker controls a page elsewhere on the same domain (e.g. a product page, user profile, or uploaded file path).
 - **`redirect_uri` not validated:** Change it to your server entirely. The auth code arrives at your server.
 - **Auth code reuse:** Try submitting the same auth code twice — some servers don't invalidate used codes.
+- **Trusted application mass assignment:** When creating or editing an OAuth application, intercept the save request and append a `trusted=1` (or `doorkeeper_application[trusted]=1` in Rails) parameter to the POST/PUT body. If the server accepts it, the app becomes "trusted by default" — users are silently authorized without seeing the consent screen. Send the authorization URL to any user; the auth code arrives at your redirect_uri with no user interaction required. Test: compare the OAuth flow for a normal app (shows consent) vs. the tampered app (redirects straight to your callback with a code).
+- **Access token leakage via Referer header:** If the app appends the OAuth access token to a redirect URL as a fragment or query parameter (e.g., `https://app.com/callback#access_token=TOKEN`), and that landing page loads third-party resources (analytics, CDNs, tracking pixels), the full URL — including the token — is sent as the `Referer` header to those third parties. Test: after completing an OAuth flow, check whether the callback URL contains the token as a URL parameter or fragment. If yes, inspect what third-party requests are made from the callback page and whether `Referer` is sent. Token in URL = leaks to any subresource on that page.
+- **Unverified email claim → third-party ATO:** When a user authenticates via a third-party OAuth provider (Google, GitHub, etc.) and the app maps the incoming email claim to an existing account without verifying that the provider actually confirmed the email, an attacker can register with the target provider using an unverified email matching a victim's account on the target app. The app trusts the claim and logs the attacker in as the victim. Test: register a new OAuth account at the provider with the victim's email but do not verify it; attempt OAuth login to the target app. If the app accepts the unverified email claim from the provider and maps it to the existing account, it's vulnerable.
+
+---
+
+## 16.5 SAML entityId trailing whitespace bypass
+
+When an app matches incoming SAML responses to the correct SSO organization by looking up the `entityId` (Identity Provider Issuer), the lookup may use `trim()` to normalize the value. If an attacker registers a new SSO organization with the same `entityId` as a legitimate one but with a trailing space (`myentity ` instead of `myentity`), the app may:
+
+1. Authenticate the user against the legitimate SSO (SAML response issuer matches after trim)
+2. Then add/log-in the user to the attacker's organization (lookup finds attacker's `entityId` with the space, which sorts before or is prioritized over the canonical one)
+
+**Impact variants:**
+- **DoS:** Legitimate users can no longer log into their organization — SSO lookup resolves to attacker's org
+- **Account takeover:** New users or users removed from the legitimate org who try SSO get added to the attacker's org instead
+
+**Test:**
+1. Create a new SSO-enabled organization
+2. Set the `entityId` to match a target organization's entityId with one trailing space
+3. Have a user attempt SSO to the legitimate organization
+4. Check which organization they land in
+
+The bug is in trim-then-lookup patterns where the lookup uses the original (untrimmed) value.
+
+---
+
+## 16.6 Signed session cookie with weak or default secret
+
+When a framework (Flask, Redash, or any app using itsdangerous/similar) signs session cookies with a static secret key, the signature can be brute-forced offline. Once the secret is recovered, you can forge arbitrary session data.
+
+**Detection:** Flask session cookies start with a dot-separated base64 payload: `eyJ....<hash>`. Redash and similar apps may use the same itsdangerous `URLSafeTimedSerializer`.
+
+**Crack the secret:**
+```bash
+# Install flask-unsign if needed: pip3 install flask-unsign
+flask-unsign --unsign --cookie 'SESSION_COOKIE_VALUE' --wordlist /usr/share/seclists/Passwords/Leaked-Databases/rockyou.txt --no-literal-eval
+```
+
+**Forge a session with the recovered secret:**
+```bash
+# Example: escalate user_id to 1 (admin) or set role
+flask-unsign --sign --cookie "{'user_id': 1, 'role': 'admin'}" --secret 'RECOVERED_SECRET'
+```
+
+Replace the session cookie with the forged value. Also test with default/common secrets before running rockyou: `secret`, `SECRET_KEY`, `mysecret`, `flask`, `development`, `changeme`, the app name.
+
+**When to apply:** Any app using Flask sessions, Redash, or apps with itsdangerous-based signing where you can observe the cookie format.
+
+**Rails `secret_key_base` — same pattern, higher stakes:** Rails signs cookies and internal tokens with `secret_key_base`. If this value is exposed (via error page, git leak, `.env` file — see info-disclosure §4), you can forge signed session cookies and any `ActiveSupport::MessageVerifier` token.
+
+```bash
+# Forge a Rails signed cookie with known secret_key_base
+# Use rails-secret or construct manually; quickest via a local Rails console:
+# ActiveSupport::MessageVerifier.new(SECRET).generate({user_id: 1, role: 'admin'})
+```
+
+**Critical escalation:** Rails `ActiveSupport::MessageVerifier` and `MessageEncryptor` use **Marshal** as the default serializer (not JSON). A forged token that is deserialized triggers Marshal gadget chains → RCE. If the app uses `cookies.signed` or `cookies.encrypted` anywhere, and you have `secret_key_base`, this is full RCE via deserialization — not just session forgery. Cross-invoke the `deserialization` skill for gadget chain generation.
 
 ---
 

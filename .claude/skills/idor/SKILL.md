@@ -208,6 +208,25 @@ First use GET to obtain the victim's `uuid` (IDOR info disclosure), then use it 
 
 ---
 
+## 8.2 Soft-deleted / ghost object IDOR
+
+When a resource is deleted via the UI (poll, post, comment, message), the backend may only set a `deleted_at` flag or move it to a "pending deletion" state rather than immediately removing it. Direct API access to the resource ID may still return full content for an extended window (minutes to days):
+
+**Test methodology:**
+1. Create a resource (post, poll, comment, file) in your account
+2. Delete it via the normal UI flow — confirm it disappears from the interface
+3. Immediately hit the direct API endpoint for that resource ID
+4. Also test as a different user (or unauthenticated) — the deletion flag may suppress it for the owner but not for others
+
+**What to look for:**
+- Soft-delete patterns: `deleted_at IS NULL` queries that miss a privacy check for external access
+- Content platforms where deleted posts return data via `/api/v1/posts/:id` even after removal
+- Social features: polls, stories, reactions — deletion is often async or delayed
+
+**Impact:** Deleted content (polls, messages, posts) remains readable by anyone who knows the ID for an extended retention window. Combined with prior ID enumeration, an attacker can read content the owner believed was removed.
+
+---
+
 ## 9. Second-order IDOR
 
 A second-order IDOR occurs when:
@@ -258,6 +277,7 @@ Best practice for reporting:
 - **Path traversal in ID:** `/api/users/1/../2`, `/api/users/1%2F..%2F2`
 - **Wildcard:** `/api/users/*`, `/api/users/%00` — some frameworks handle null bytes oddly
 - **Case variation:** `/API/USERS/2` vs `/api/users/2` — different routing may skip middleware
+- **Context/reference parameter in preview or embed features:** Preview, quote, onebox, and embed features often accept a context parameter (`source_topic_id`, `parent_id`, `ref_id`, `context`) to scope the preview. If the server uses this parameter to determine access permissions rather than the requesting user's own authorization, supplying a different resource's ID as the context can bypass ACL. Test: find a preview/embed endpoint, add `?source_topic_id=VICTIM_PRIVATE_ID` or similar, observe if private content is returned in the preview.
 
 ---
 

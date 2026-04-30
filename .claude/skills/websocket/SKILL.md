@@ -265,6 +265,21 @@ Useful for: testing access control (can unauthenticated WS send privileged messa
 
 ---
 
+## 9.5 Localhost WebSocket with no origin check
+
+Desktop/Electron apps and local developer tools often run a WebSocket server on `localhost` (e.g., `ws://127.0.0.1:PORT`) to expose a control or debug interface. These servers frequently perform no `Origin` check because they assume only local processes can connect — they do not account for browser-based access. Any website the victim visits can open a WebSocket connection to `ws://127.0.0.1:PORT` from the browser; the browser attaches no cross-origin restriction to WebSocket upgrades by default.
+
+**Test pattern:**
+1. Identify the localhost port (look for it in the app's JS, config files, or by scanning common ports like 9229, 12345, 7777, etc.)
+2. From a browser console or attacker-controlled webpage, attempt: `new WebSocket('ws://127.0.0.1:PORT')`
+3. If the connection opens, enumerate messages and commands the app accepts
+
+**Impact:** Can range from information disclosure (reading local app state) to full RCE if the local interface exposes command execution (e.g., Node.js `--inspect` debugger on port 9229 accepts arbitrary JS via the Chrome DevTools Protocol — `Runtime.evaluate` runs code in the Node.js process). Other common impacts: arbitrary file read via the local app's API, triggering sensitive actions, or accessing credentials stored in the app.
+
+**Classic example:** Chrome DevTools Protocol on port 9229 — `ws://127.0.0.1:9229/<uuid>`. If an Electron app exposes this without `--remote-debugging-port` restrictions and the user visits a malicious page, the page can achieve RCE inside the Electron process.
+
+---
+
 ## 10. Chain candidates
 
 | Chain | Other skill | Impact uplift |

